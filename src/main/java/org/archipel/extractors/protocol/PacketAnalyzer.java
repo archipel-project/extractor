@@ -120,7 +120,11 @@ public final class PacketAnalyzer {
         {
             final var type = writeMethodInstruction.name.substring(5);
             final Type[] args = Type.getArgumentTypes(writeMethodInstruction.desc);
-            if(args.length == 1 || writeMethodInstruction.name.equals("writeCollection") || writeMethodInstruction.name.equals("writeOptional") || writeMethodInstruction.name.equals("writeNullable"))
+            if(args.length == 1 || writeMethodInstruction.name.equals("writeCollection") ||
+                    writeMethodInstruction.name.equals("writeOptional") ||
+                    writeMethodInstruction.name.equals("writeNullable") ||
+                    writeMethodInstruction.name.equals("writeEnumSet") ||
+                    writeMethodInstruction.name.equals("writeMap"))
             {
                 final String name = processMethodInstruction(args[0], methodNode, writeMethodInstruction);
                 result.add(new PacketValue(type, name));
@@ -134,7 +138,7 @@ public final class PacketAnalyzer {
                     final String name = processMethodInstruction(args[0], methodNode, writeMethodInstruction.getPrevious());
                     result.add(new PacketValue(type, name));
                 }
-                else if(writeMethodInstruction.name.equals("writeRegistryValue"))
+                else if(writeMethodInstruction.name.equals("writeRegistryValue") || writeMethodInstruction.name.equals("writeRegistryEntry"))
                 {
                     final String name = processMethodInstruction(args[1], methodNode, writeMethodInstruction);
                     result.add(new PacketValue(type, name));
@@ -184,34 +188,16 @@ public final class PacketAnalyzer {
             {
                 final var varType = Type.getType(localVariablesTable.get(varInsnNode.var).desc);
 
-                if(varType.equals(toFulfill) || ((varType.getSort() == Type.BYTE || varType.getSort() == Type.SHORT) && toFulfill.getSort() == Type.INT))
+                if (checkCompatibility(toFulfill, varType))
                     return current;
-
-                if(toFulfill.getSort() == Type.OBJECT && varType.getSort() == Type.OBJECT)
-                {
-                    final var toFulfillClass = Class.forName(toFulfill.getClassName());
-                    if(toFulfillClass.isAssignableFrom(Class.forName(varType.getClassName())))
-                        return current;
-                    else System.out.println("Erreur ?");
-                }
-                else System.out.println("Erreur ?");
             }
 
             if(current instanceof FieldInsnNode fieldInsnNode)
             {
                 final var fieldType = Type.getType(fieldInsnNode.desc);
 
-                if(fieldType.equals(toFulfill) || ((fieldType.getSort() == Type.BYTE || fieldType.getSort() == Type.SHORT) && toFulfill.getSort() == Type.INT))
+                if (checkCompatibility(toFulfill, fieldType))
                     return current;
-
-                if(toFulfill.getSort() == Type.OBJECT && fieldType.getSort() == Type.OBJECT)
-                {
-                    final var toFulfillClass = Class.forName(toFulfill.getClassName());
-                    if(toFulfillClass.isAssignableFrom(Class.forName(fieldType.getClassName())))
-                        return current;
-                    else System.out.println("Erreur ?");
-                }
-                else System.out.println("Erreur ?");
             }
 
             if(current instanceof MethodInsnNode methodInsnNode)
@@ -235,6 +221,21 @@ public final class PacketAnalyzer {
         }
         System.out.println("Erreur ?");
         return null;
+    }
+
+    private static boolean checkCompatibility(Type toFulfill, Type fieldType) throws ClassNotFoundException
+    {
+        if(fieldType.equals(toFulfill) || ((fieldType.getSort() == Type.BYTE || fieldType.getSort() == Type.SHORT) && toFulfill.getSort() == Type.INT))
+            return true;
+
+        if(toFulfill.getSort() == Type.OBJECT && fieldType.getSort() == Type.OBJECT)
+        {
+            final var toFulfillClass = Class.forName(toFulfill.getClassName());
+            if(toFulfillClass.isAssignableFrom(Class.forName(fieldType.getClassName()))) return true;
+            else System.out.println("Erreur ?");
+        }
+        else System.out.println("Erreur ?");
+        return false;
     }
 
     private record PacketContainer(boolean special, List<PacketValue> struct) {}
