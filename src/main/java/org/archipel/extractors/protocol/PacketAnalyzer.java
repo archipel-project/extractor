@@ -1,51 +1,45 @@
 package org.archipel.extractors.protocol;
 
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.Multimap;
+import com.google.gson.JsonObject;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.network.packet.Packet;
-import org.apache.commons.lang3.tuple.Pair;
 import org.archipel.Main;
 import org.archipel.utils.asm.ASMUtils;
-import org.archipel.utils.asm.CFAnalyser;
-import org.archipel.utils.asm.Node;
-import org.archipel.utils.asm.TrackingInterpreter;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.commons.Method;
 import org.objectweb.asm.tree.*;
-import org.objectweb.asm.tree.analysis.AnalyzerException;
-import org.objectweb.asm.tree.analysis.SourceValue;
 
-import java.io.IOException;
-import java.util.NoSuchElementException;
-
-import static org.objectweb.asm.ClassReader.EXPAND_FRAMES;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Random;
 
 public final class PacketAnalyzer {
     private static final Method TARGET = ASMUtils.getMethod(Packet.class, "write", PacketByteBuf.class);
 
-    public static Multimap<String, Pair<String, String>> packetToFieldsMap = ArrayListMultimap.create();
+    //public static Multimap<String, Pair<String, String>> packetToFieldsMap = ArrayListMultimap.create();
 
-    public static String analyze(Class<? extends Packet<?>> packet) {
+    public static JsonObject analyze(Class<? extends Packet<?>> packet) {
+        final JsonObject object = new JsonObject();
         try(var in = ASMUtils.loadClass(packet)) {
             var cr = new ClassReader(in);
             var cn = new ClassNode();
 
-            cr.accept(cn, EXPAND_FRAMES);
+            cr.accept(cn, ClassReader.EXPAND_FRAMES);
 
             var writeMethod = cn.methods.stream()
                     .filter(m -> ASMUtils.sameMethod(m, TARGET))
                     .findFirst()
                     .orElseThrow();
 
-            var inter = new TrackingInterpreter(writeMethod);
+            /*var inter = new TrackingInterpreter(writeMethodInstruction);
             var a = new CFAnalyser<>(inter);
 
-            a.analyze(Type.getInternalName(packet), writeMethod);
+            a.analyze(Type.getInternalName(packet), writeMethodInstruction);
 
-            var insns = writeMethod.instructions.toArray();
-            var nodes = a.getFrames();
+            var insns = writeMethodInstruction.instructions.toArray();
+            var nodes = a.getFrames();*/
 
             /* for (Frame<SourceValue> node : nodes) {
                 if (node instanceof Node<?> n && n.successors.size() > 1) {
@@ -56,18 +50,197 @@ public final class PacketAnalyzer {
 
             Main.LOGGER.info(packet.getName() + ":");
 
-            for (int i = 0; i < nodes.length; i++) {
-                if (nodes[i] != null)
-                    analyzeFrame(packet, inter, insns[i], (Node<SourceValue>)nodes[i]);
+            final var x = processMethod(writeMethod);
+            object.addProperty("packet", packet.getSimpleName()
+                    .replace("C2SPacket", "")
+                    .replace("S2CPacket", ""));
+            final JsonObject struct = new JsonObject();
+            for (final PacketValue packetValue : x.struct)
+            {
+                System.out.println(packetValue.type + " " + packetValue.name);
+                if(!struct.has(packetValue.name))
+                    struct.addProperty(packetValue.name, packetValue.type);
+                else struct.addProperty(packetValue.name + "_" + new Random().nextInt(0xFF), packetValue.type);
+                // TODO: better name
             }
-        } catch (IOException | NoSuchElementException | AnalyzerException e) {
+            object.addProperty("special", x.special);
+            object.add("struct", struct);
+
+            /*for (int i = 0; i < nodes.length; i++)
+            {
+                //final Node<SourceValue> node = (Node<SourceValue>)nodes[i];
+                if (nodes[i] instanceof Node<SourceValue> sourceValueNode)
+                {
+                    System.out.println("---------------------------------");
+                    System.out.println(packet.getName());
+                    System.out.println(ASMUtils.disassemble(insns[i]));
+                    System.out.println(sourceValueNode);
+                    //analyzeFrame(packet, inter, insns[i], sourceValueNode);
+                }
+            }*/
+        } catch (Exception e) {
             Main.LOGGER.error("Failed to analyze " + packet, e);
         }
 
-        return packet.getSimpleName().replace("C2SPacket", "").replace("S2CPacket", "");
+        return object;
     }
 
-    private static void analyzeFrame(Class<? extends Packet<?>> packet, TrackingInterpreter inter, AbstractInsnNode insn, Node<SourceValue> n) throws AnalyzerException {
+    private static PacketContainer processMethod(MethodNode methodNode) throws Exception
+    {
+        final var instructions = methodNode.instructions.toArray();
+
+        final List<MethodInsnNode> writeMethods = Arrays.stream(instructions)
+                .filter(insn -> insn instanceof MethodInsnNode)
+                .map(insn -> (MethodInsnNode)insn)
+                .filter(insn -> insn.owner.equals("net/minecraft/network/PacketByteBuf"))
+                .filter(insn -> insn.name.startsWith("write"))
+                .toList();
+
+        final List<MethodInsnNode> otherWriteMethods = Arrays.stream(instructions)
+                .filter(insn -> insn instanceof MethodInsnNode)
+                .map(insn -> (MethodInsnNode)insn)
+                .filter(insn -> !insn.owner.equals("net/minecraft/network/PacketByteBuf"))
+                .filter(insn -> insn.name.startsWith("write"))
+                .toList();
+
+        final boolean containsJumps = Arrays.stream(instructions)
+                .anyMatch(insn -> insn instanceof JumpInsnNode);
+
+        List<PacketValue> result = new ArrayList<>();
+
+        if(!otherWriteMethods.isEmpty() || containsJumps)
+        {
+            System.out.println("This packet needs a manual process.");
+            return new PacketContainer(true, result);
+        }
+
+        boolean special = false;
+
+        for (final MethodInsnNode writeMethodInstruction : writeMethods)
+        {
+            final var type = writeMethodInstruction.name.substring(5);
+            final Type[] args = Type.getArgumentTypes(writeMethodInstruction.desc);
+            if(args.length == 1 || writeMethodInstruction.name.equals("writeCollection") || writeMethodInstruction.name.equals("writeOptional") || writeMethodInstruction.name.equals("writeNullable"))
+            {
+                final String name = processMethodInstruction(args[0], methodNode, writeMethodInstruction);
+                result.add(new PacketValue(type, name));
+            }
+            else
+            {
+                // some two args methods manually handled
+                if(writeMethodInstruction.name.equals("writeString"))
+                {
+                    // assume that there is a ICONST_X / SIPUSH X / BIPUSH X before the method call
+                    final String name = processMethodInstruction(args[0], methodNode, writeMethodInstruction.getPrevious());
+                    result.add(new PacketValue(type, name));
+                }
+                else if(writeMethodInstruction.name.equals("writeRegistryValue"))
+                {
+                    final String name = processMethodInstruction(args[1], methodNode, writeMethodInstruction);
+                    result.add(new PacketValue(type, name));
+                }
+                else
+                {
+                    System.out.println("Two args required: " + writeMethodInstruction.name);
+                    special = true;
+                }
+            }
+        }
+
+        if(!special)
+        {
+            for (final PacketValue packetValue : result)
+            {
+                if(packetValue.name.equals("null"))
+                {
+                    special = true;
+                    break;
+                }
+            }
+        }
+
+        return new PacketContainer(special, result);
+    }
+
+    private static String processMethodInstruction(Type arg, MethodNode methodNode, AbstractInsnNode instruction) throws Exception
+    {
+        final var argInsn = fulfillArg(methodNode.localVariables, instruction, arg);
+        String name = "null";
+        if(argInsn instanceof FieldInsnNode fieldInsnNode)
+            name = fieldInsnNode.name;
+        else if(argInsn instanceof VarInsnNode varInsnNode)
+            name = methodNode.localVariables.get(varInsnNode.var).name;
+        else System.out.println("Erreur ?");
+
+        return name;
+    }
+
+    private static AbstractInsnNode fulfillArg(List<LocalVariableNode> localVariablesTable, AbstractInsnNode start, Type toFulfill) throws Exception
+    {
+        AbstractInsnNode current = start.getPrevious();
+        while (current != null)
+        {
+            if (current instanceof VarInsnNode varInsnNode)
+            {
+                final var varType = Type.getType(localVariablesTable.get(varInsnNode.var).desc);
+
+                if(varType.equals(toFulfill) || ((varType.getSort() == Type.BYTE || varType.getSort() == Type.SHORT) && toFulfill.getSort() == Type.INT))
+                    return current;
+
+                if(toFulfill.getSort() == Type.OBJECT && varType.getSort() == Type.OBJECT)
+                {
+                    final var toFulfillClass = Class.forName(toFulfill.getClassName());
+                    if(toFulfillClass.isAssignableFrom(Class.forName(varType.getClassName())))
+                        return current;
+                    else System.out.println("Erreur ?");
+                }
+                else System.out.println("Erreur ?");
+            }
+
+            if(current instanceof FieldInsnNode fieldInsnNode)
+            {
+                final var fieldType = Type.getType(fieldInsnNode.desc);
+
+                if(fieldType.equals(toFulfill) || ((fieldType.getSort() == Type.BYTE || fieldType.getSort() == Type.SHORT) && toFulfill.getSort() == Type.INT))
+                    return current;
+
+                if(toFulfill.getSort() == Type.OBJECT && fieldType.getSort() == Type.OBJECT)
+                {
+                    final var toFulfillClass = Class.forName(toFulfill.getClassName());
+                    if(toFulfillClass.isAssignableFrom(Class.forName(fieldType.getClassName())))
+                        return current;
+                    else System.out.println("Erreur ?");
+                }
+                else System.out.println("Erreur ?");
+            }
+
+            if(current instanceof MethodInsnNode methodInsnNode)
+            {
+                final var returnType = Type.getReturnType(methodInsnNode.desc);
+
+                if(returnType.equals(toFulfill))
+                    return fulfillArg(localVariablesTable, current, Type.getObjectType(methodInsnNode.owner));
+
+                if(toFulfill.getSort() == Type.OBJECT && returnType.getSort() == Type.OBJECT)
+                {
+                    final var toFulfillClass = Class.forName(toFulfill.getClassName());
+                    if(toFulfillClass.isAssignableFrom(Class.forName(returnType.getClassName())))
+                        return fulfillArg(localVariablesTable, current, Type.getObjectType(methodInsnNode.owner));
+                    else System.out.println("Erreur ?");
+                }
+                else System.out.println("Erreur ?");
+            }
+
+            current = current.getPrevious();
+        }
+        System.out.println("Erreur ?");
+        return null;
+    }
+
+    private record PacketContainer(boolean special, List<PacketValue> struct) {}
+    private record PacketValue(String type, String name) {}
+
+    /*private static void analyzeFrame(Class<? extends Packet<?>> packet, TrackingInterpreter inter, AbstractInsnNode insn, Node<SourceValue> n) throws AnalyzerException {
         if (insn instanceof MethodInsnNode m) {
             Main.LOGGER.info(m.name + ':');
             // List<Type> argTypes = new ArrayList<>(List.of(Type.getArgumentTypes(m.desc)));
@@ -135,5 +308,5 @@ public final class PacketAnalyzer {
                 }
             }
         } */
-    }
+    //}
 }

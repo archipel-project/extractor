@@ -27,12 +27,15 @@ public final class ProtocolExtractor implements Extractor {
                 for (var id : new TreeSet<>(map.keySet())) {
                     var packet = map.get(id.intValue());
                     packets.add(PacketAnalyzer.analyze(packet));
+                    //break; // TODO: debug only
                 }
 
                 states.add(state.name().toLowerCase(), packets);
+                //break; // TODO: debug only
             }
 
             protocol.add(side == NetworkSide.CLIENTBOUND ? "s2c" : "c2s", states);
+            //break; // TODO: debug only
         }
 
         return protocol;

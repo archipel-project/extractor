@@ -44,10 +44,12 @@ public final class ASMUtils {
     }
 
     public static String getInsnAsString(AbstractInsnNode insn) {
-        if (insn instanceof LabelNode l)
-            return l.getLabel().toString();
-        if (insn instanceof LineNumberNode n)
-            return String.valueOf(n.line);
+        if (insn instanceof LabelNode)
+            return "LABEL";
+        if (insn instanceof LineNumberNode)
+            return "LINE";
+        if(insn instanceof FrameNode)
+            return "FRAME";
         if (insn != null)
             return getOpcodeString(insn.getOpcode());
         else
@@ -57,8 +59,8 @@ public final class ASMUtils {
     public static String disassemble(AbstractInsnNode insn) {
         var str = new StringBuilder(getInsnAsString(insn)).append(' ');
 
-        if (insn instanceof LabelNode)
-            str.append(':');
+        if (insn instanceof LabelNode l)
+            str.append(l.getLabel().toString());
 
         if (insn instanceof VarInsnNode v)
             str.append(v.var);
@@ -66,8 +68,30 @@ public final class ASMUtils {
         if (insn instanceof FieldInsnNode f)
             str.append(String.format("%s : %s", f.name, f.desc));
 
+        if(insn instanceof LineNumberNode l)
+            str.append(l.line);
+
         if (insn instanceof MethodInsnNode m)
             str.append(String.format("%s %s", m.name, m.desc));
+
+        if(insn instanceof TypeInsnNode t)
+            str.append(t.desc);
+
+        if(insn instanceof IntInsnNode i)
+            str.append(i.operand);
+
+        if(insn instanceof JumpInsnNode j)
+            str.append(j.label.getLabel().toString());
+
+        if(insn instanceof FrameNode f)
+        {
+            final var type = f.type;
+            str.append(type == -1 ? "NEW" : type == 0 ? "FULL" : "OTHER (%d)".formatted(type))
+                    .append(" ")
+                    .append(f.local)
+                    .append(" ")
+                    .append(f.stack);
+        }
 
         return str.toString();
     }

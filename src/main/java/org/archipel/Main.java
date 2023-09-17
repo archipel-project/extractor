@@ -3,6 +3,7 @@ package org.archipel;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.api.ModInitializer;
 import org.archipel.extractors.Extractor;
+import org.archipel.extractors.TypesExtractor;
 import org.archipel.extractors.protocol.ProtocolExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,8 +16,9 @@ import java.nio.file.Paths;
 public final class Main implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("extractor");
 
-    private static final Extractor[] extractors = {
-           new ProtocolExtractor()
+    private static final Extractor[] EXTRACTORS = {
+            new TypesExtractor(),
+            new ProtocolExtractor()
     };
 
     @Override
@@ -34,7 +36,7 @@ public final class Main implements ModInitializer {
 
         var gson = new GsonBuilder().setPrettyPrinting().create();
 
-        for (var ext : extractors) {
+        for (var ext : EXTRACTORS) {
             try (var writer = Files.newBufferedWriter(outputDir.resolve(ext.getName() + ".json"))) {
                 gson.toJson(ext.extract(), writer);
                 LOGGER.info("... extracted " + ext.getName());
